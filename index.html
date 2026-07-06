@@ -2511,4 +2511,198 @@ function applyOverviewFilter(){
         return true;
       });
       document.getElementById('ov-board-total').textContent=filteredAll.length.toLocaleString();
-      document.getElem
+      document.getElementById('all-tasks-sub').textContent='completed + open · filtered';
+    }else{
+      document.getElementById('all-tasks-sub').textContent='loading board total…';
+    }
+  }else{
+    window._currentDisplayTasks=null;
+    document.getElementById('filter-label').textContent='';
+    // Restore unfiltered board total
+    const allBoard=window._allBoardTasks||[];
+    if(allBoard.length)document.getElementById('ov-board-total').textContent=allBoard.length.toLocaleString();
+    document.getElementById('all-tasks-sub').textContent='completed + open';
+  }
+  const stats=buildMemberStats(filtered);
+  renderOverview(filtered,stats);
+}
+function clearOverviewFilter(){
+  document.getElementById('filter-from').value='';
+  document.getElementById('filter-to').value='';
+  document.getElementById('filter-label').textContent='';
+  document.getElementById('filter-hint').textContent='';
+  window._currentDisplayTasks=null;
+  const allBoard=window._allBoardTasks||[];
+  if(allBoard.length)document.getElementById('ov-board-total').textContent=allBoard.length.toLocaleString();
+  const atSub=document.getElementById('all-tasks-sub');
+  if(atSub)atSub.textContent='completed + open';
+  renderOverview(window._activeTasks||[],window._memberStats||{});
+}
+</script>
+
+<!-- ── Performance Review Chat ── -->
+<button id="ai-fab" onclick="toggleChat()" title="Performance Review">💬</button>
+
+<div id="ai-panel">
+  <div id="ai-header">
+    <div id="ai-header-left">
+      <div id="ai-avatar">📊</div>
+      <div>
+        <div id="ai-title">Performance Review</div>
+        <div id="ai-sub">Live Asana data analysis</div>
+      </div>
+    </div>
+    <button id="ai-close" onclick="toggleChat()">✕</button>
+  </div>
+
+  <div id="ai-messages">
+    <div class="ai-msg bot">👋 Ask me about any team member's performance or the overall team.<br><br>Try: <b>"Review [member name]"</b> or <b>"How is the team doing?"</b></div>
+  </div>
+
+  <div id="ai-suggestions">
+    <button class="ai-chip" onclick="quickAsk('How is the team doing overall?')">📊 Team overview</button>
+    <button class="ai-chip" onclick="quickAsk('Who has the most overdue tasks?')">⚠️ Most overdue</button>
+    <button class="ai-chip" onclick="quickAsk('Who is performing best?')">⭐ Top performer</button>
+  </div>
+
+  <div id="ai-input-row">
+    <input id="ai-input" type="text" placeholder="e.g. Review [member name]…" onkeydown="if(event.key==='Enter')sendChat();" />
+    <button id="ai-send" onclick="sendChat()">➤</button>
+  </div>
+</div>
+
+<script>
+
+// ══════════════════════════════════════════
+//  PERFORMANCE REVIEW CHAT (no API needed)
+// ══════════════════════════════════════════
+function toggleChat(){
+  const p=document.getElementById('ai-panel');
+  p.classList.toggle('open');
+  if(p.classList.contains('open')) document.getElementById('ai-input').focus();
+}
+
+function quickAsk(t){document.getElementById('ai-input').value=t;sendChat();}
+
+function addUserMsg(t){
+  const d=document.createElement('div');
+  d.className='ai-msg user';d.textContent=t;
+  document.getElementById('ai-messages').appendChild(d);scrollChat();
+}
+
+function addBotHtml(html){
+  const d=document.createElement('div');
+  d.className='ai-msg bot';d.innerHTML=html;
+  document.getElementById('ai-messages').appendChild(d);scrollChat();
+}
+
+function scrollChat(){const m=document.getElementById('ai-messages');m.scrollTop=m.scrollHeight;}
+
+function getMemberReview(name){
+  const tasks=window.allTasks||[];
+  const active=tasks.filter(t=>!isRecurring(t)&&t.assignee?.name===name);
+  const stats=(window._memberStats||{})[name];
+  if(!stats&&active.length===0) return null;
+
+  const today=todayStr();
+  const s=stats||{total:0,overdue:0,today:0,week:0,noDue:0};
+
+  // Avg days open
+  const avgDays=active.length?Math.round(active.reduce((sum,t)=>{
+    const c=t.created_at?new Date(t.created_at):new Date();
+    return sum+(Date.now()-c.getTime())/(864e5);
+  },0)/active.length):0;
+
+  // Team averages for comparison
+  const allStats=Object.values(window._memberStats||{}).filter(x=>x.total>0);
+  const teamAvgTotal=allStats.length?Math.round(allStats.reduce((s,x)=>s+x.total,0)/allStats.length):0;
+  const teamAvgOverdue=allStats.length?Math.round(allStats.reduce((s,x)=>s+x.overdue,0)/allStats.length):0;
+
+  // Score: lower overdue & higher completion = better
+  const overdueRate=s.total>0?s.overdue/s.total:0;
+  let badge,badgeClass;
+  if(overdueRate===0&&s.total<=teamAvgTotal){badge='Excellent';badgeClass='badge-great';}
+  else if(overdueRate<0.2&&s.total<=teamAvgTotal*1.5){badge='On Track';badgeClass='badge-good';}
+  else if(overdueRate>=0.4||s.overdue>=5){badge='Needs Attention';badgeClass='badge-watch';}
+  else{badge='Moderate Load';badgeClass='badge-good';}
+
+  // Build bullets
+  const bullets=[];
+  bullets.push(`<b>Open tasks:</b> ${s.total} (team avg: ${teamAvgTotal})`);
+  bullets.push(`<b>Overdue:</b> ${s.overdue} task${s.overdue!==1?'s':''} (team avg: ${teamAvgOverdue})`);
+  bullets.push(`<b>Due this week:</b> ${s.week}`);
+  bullets.push(`<b>Avg task age:</b> ${avgDays} days open`);
+  if(s.noDue>0) bullets.push(`<b>No due date:</b> ${s.noDue} task${s.noDue!==1?'s':''} — consider adding deadlines`);
+
+  // Insight
+  let insight='';
+  if(s.overdue===0&&s.total>0) insight='✅ No overdue tasks — great discipline on deadlines.';
+  else if(overdueRate>=0.5) insight='🔴 More than half of tasks are overdue — may need reprioritisation or support.';
+  else if(overdueRate>=0.3) insight='⚠️ Several tasks are overdue — worth reviewing workload.';
+  else if(s.overdue>0) insight='🟡 A few overdue tasks — worth a check-in.';
+
+  const html=[
+    `<span class="badge ${badgeClass}">${badge}</span>`,
+    '<br><br>',
+    bullets.map(b=>'• '+b).join('<br>'),
+    insight?'<br><br><i>'+insight+'</i>':''
+  ].join('');
+  return{name,html,badge,badgeClass};
+}
+
+function getTeamReview(){
+  const allStats=Object.values(window._memberStats||{}).filter(x=>x.total>0);
+  if(!allStats.length) return '<i>No data loaded yet — wait for the dashboard to finish loading.</i>';
+  const totalTasks=allStats.reduce((s,x)=>s+x.total,0);
+  const totalOverdue=allStats.reduce((s,x)=>s+x.overdue,0);
+  const overdueRate=totalTasks>0?Math.round(totalOverdue/totalTasks*100):0;
+  const membersWithOverdue=allStats.filter(x=>x.overdue>0).length;
+  const sorted=[...allStats].sort((a,b)=>a.overdue-b.overdue);
+  const top=sorted[0];const worst=sorted[sorted.length-1];
+  const lines=[
+    `<b>Team size:</b> ${allStats.length} members with active tasks`,
+    `<b>Total open tasks:</b> ${totalTasks}`,
+    `<b>Total overdue:</b> ${totalOverdue} (${overdueRate}% overdue rate)`,
+    `<b>Members with overdue:</b> ${membersWithOverdue} of ${allStats.length}`,
+    top?`<b>🌟 Fewest overdue:</b> ${top.name} (${top.overdue})`:'',
+    worst&&worst.overdue>0?`<b>⚠️ Most overdue:</b> ${worst.name} (${worst.overdue})`:'',
+  ].filter(Boolean);
+  const insight=overdueRate===0?'✅ Zero overdue across the team — excellent!':
+    overdueRate>=40?'🔴 High overdue rate — consider a team-wide priority review.':
+    overdueRate>=20?'⚠️ Moderate overdue rate — some members may need support.':
+    '🟡 Low overdue rate — team is mostly on track.';
+  return lines.join('<br>')+'<br><br><i>'+insight+'</i>';
+}
+
+function sendChat(){
+  const input=document.getElementById('ai-input');
+  const text=input.value.trim();
+  if(!text) return;
+  addUserMsg(text);
+  input.value='';
+  const lower=text.toLowerCase();
+  const members=window.allTasks?[...new Set(window.allTasks.map(t=>t.assignee?.name).filter(Boolean))]:[];
+  setTimeout(()=>{
+    const matchedName=members.find(n=>lower.includes(n.toLowerCase()));
+    if(matchedName){
+      const rev=getMemberReview(matchedName);
+      if(rev) addBotHtml(`<b>${matchedName}</b><br><br>${rev.html}`);
+      else addBotHtml(`No task data found for <b>${matchedName}</b>.`);
+    } else if(lower.includes('team')||lower.includes('overall')||lower.includes('everyone')){
+      addBotHtml(getTeamReview());
+    } else if(lower.includes('most overdue')||lower.includes('behind')){
+      const s=Object.entries(window._memberStats||{}).filter(([,v])=>v.overdue>0).sort((a,b)=>b[1].overdue-a[1].overdue).slice(0,5);
+      if(!s.length){addBotHtml('No overdue tasks right now! 🎉');return;}
+      addBotHtml('<b>Most overdue:</b><br>'+s.map(([n,v],i)=>`${i+1}. ${n} — ${v.overdue} overdue`).join('<br>'));
+    } else if(lower.includes('best')||lower.includes('top performer')){
+      const s=Object.entries(window._memberStats||{}).filter(([,v])=>v.total>0).sort((a,b)=>(a[1].overdue/a[1].total)-(b[1].overdue/b[1].total)).slice(0,5);
+      if(!s.length){addBotHtml('No data loaded yet.');return;}
+      addBotHtml('<b>Top performers:</b><br>'+s.map(([n,v],i)=>`${i+1}. ${n} — ${v.overdue}/${v.total} overdue`).join('<br>'));
+    } else {
+      addBotHtml('Try:<br>• <b>"Review [name]"</b> for a member breakdown<br>• <b>"How is the team doing?"</b><br>• <b>"Who has the most overdue tasks?"</b><br>• <b>"Who is performing best?"</b>');
+    }
+  },300);
+}
+</script>
+</body>
+</html>
